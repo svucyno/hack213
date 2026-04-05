@@ -1,9 +1,12 @@
-import { useState, useRef } from 'react'
-import { Upload } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Upload, Shirt } from 'lucide-react'
+import axios from 'axios'
 import outfits from '../data/outfits'
 import OutfitCard from '../components/OutfitCard'
+import LoadingSpinner from '../components/LoadingSpinner'
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png']
+const API_BASE = 'http://localhost:5000'
 
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -12,15 +15,27 @@ function formatFileSize(bytes) {
 
 export default function TryOn() {
   // ── Upload state ──────────────────────────────────────────────────────────
-  const [dragActive, setDragActive] = useState(false)
+  const [dragActive, setDragActive]   = useState(false)
   const [selectedFile, setSelectedFile] = useState(null)
-  const [previewUrl, setPreviewUrl] = useState(null)
+  const [previewUrl, setPreviewUrl]   = useState(null)
   const [uploadError, setUploadError] = useState('')
 
   // ── Outfit state ──────────────────────────────────────────────────────────
   const [selectedOutfit, setSelectedOutfit] = useState(null)
 
+  // ── Generation state ──────────────────────────────────────────────────────
+  const [isLoading, setIsLoading]         = useState(false)
+  const [result, setResult]               = useState(null)
+  const [generateError, setGenerateError] = useState('')
+
   const fileInputRef = useRef(null)
+
+  // ── Auto-dismiss error toast after 4 s ───────────────────────────────────
+  useEffect(() => {
+    if (!generateError) return
+    const timer = setTimeout(() => setGenerateError(''), 4000)
+    return () => clearTimeout(timer)
+  }, [generateError])
 
   // ── File handling ─────────────────────────────────────────────────────────
   function applyFile(file) {
@@ -36,7 +51,6 @@ export default function TryOn() {
 
   function handleFileInput(e) {
     applyFile(e.target.files[0])
-    // reset so same file can be re-selected
     e.target.value = ''
   }
 
@@ -46,26 +60,44 @@ export default function TryOn() {
     applyFile(e.dataTransfer.files[0])
   }
 
-  function handleDragOver(e) {
-    e.preventDefault()
-    setDragActive(true)
-  }
-
-  function handleDragLeave(e) {
-    e.preventDefault()
-    setDragActive(false)
-  }
+  function handleDragOver(e) { e.preventDefault(); setDragActive(true) }
+  function handleDragLeave(e) { e.preventDefault(); setDragActive(false) }
 
   function handleChangePhoto() {
     setSelectedFile(null)
     setPreviewUrl(null)
     setUploadError('')
+    setResult(null)
     fileInputRef.current?.click()
   }
 
-  // ── Generate (stub) ───────────────────────────────────────────────────────
-  function handleGenerate() {
-    console.log('Generating try-on:', { file: selectedFile, outfit: selectedOutfit })
+  // ── Generate ──────────────────────────────────────────────────────────────
+  async function handleGenerate() {
+    if (!selectedFile || !selectedOutfit) return
+
+    setIsLoading(true)
+    setResult(null)
+    setGenerateError('')
+
+    const formData = new FormData()
+    formData.append('image', selectedFile)
+    formData.append('outfitId', selectedOutfit.id.toString())
+
+    try {
+      const [response] = await Promise.all([
+        axios.post(`${API_BASE}/api/tryon`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        }),
+        new Promise((resolve) => setTimeout(resolve, 2500)),
+      ])
+      setResult(response.data)
+    } catch (err) {
+      setGenerateError(
+        err.response?.data?.message || err.message || 'Something went wrong.'
+      )
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const canGenerate = !!selectedFile && !!selectedOutfit
@@ -82,7 +114,6 @@ export default function TryOn() {
           {/* ── Section A: Image Upload ─────────────────────────────────── */}
           <h2 className="font-bold text-2xl text-gray-800 mb-4">Upload Your Photo</h2>
 
-          {/* Hidden file input */}
           <input
             ref={fileInputRef}
             type="file"
@@ -92,7 +123,6 @@ export default function TryOn() {
           />
 
           {!selectedFile ? (
-            /* Drag & drop zone */
             <div
               onClick={() => fileInputRef.current?.click()}
               onDrop={handleDrop}
@@ -109,7 +139,6 @@ export default function TryOn() {
               <p className="text-gray-400 text-sm">or click to browse</p>
             </div>
           ) : (
-            /* Preview */
             <div>
               <img
                 src={previewUrl}
@@ -133,7 +162,6 @@ export default function TryOn() {
             </div>
           )}
 
-          {/* Upload error */}
           {uploadError && (
             <p className="text-red-500 text-sm mt-2">{uploadError}</p>
           )}
@@ -157,10 +185,10 @@ export default function TryOn() {
           {/* ── Generate Button ──────────────────────────────────────────── */}
           <button
             onClick={handleGenerate}
-            disabled={!canGenerate}
+            disabled={!canGenerate || isLoading}
             title={!canGenerate ? 'Please upload a photo and select an outfit' : undefined}
             className={`mt-8 w-full py-4 text-lg font-semibold rounded-2xl text-white bg-gradient-to-r from-pink-500 to-purple-600 shadow-xl transition-all duration-300 ${
-              canGenerate
+              canGenerate && !isLoading
                 ? 'hover:from-pink-600 hover:to-purple-700 hover:scale-105'
                 : 'opacity-50 cursor-not-allowed'
             }`}
@@ -170,13 +198,102 @@ export default function TryOn() {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════
-            RIGHT PANEL — placeholder
+            RIGHT PANEL
         ══════════════════════════════════════════════════════════════════ */}
-        <div className="w-full md:w-1/2 flex items-center justify-center rounded-2xl border-2 border-dashed border-purple-200 bg-white/60 min-h-64 text-gray-400 text-sm font-medium">
-          Output Panel — Coming in next PR
-        </div>
+        <div className="w-full md:w-1/2">
 
+          {/* State 1 — Idle */}
+          {!isLoading && !result && (
+            <div className="border-2 border-dashed border-pink-200 rounded-2xl bg-white/60 p-16 text-center h-full flex flex-col items-center justify-center">
+              <Shirt className="w-24 h-24 text-pink-200 mx-auto" />
+              <p className="text-gray-400 font-medium mt-4">
+                Your try-on result will appear here
+              </p>
+            </div>
+          )}
+
+          {/* State 2 — Loading */}
+          {isLoading && (
+            <div className="bg-white rounded-2xl shadow-xl p-16 text-center h-full flex flex-col items-center justify-center">
+              <LoadingSpinner size="lg" />
+              <p className="text-purple-600 font-semibold mt-4 animate-pulse">
+                Generating your look... ✨
+              </p>
+            </div>
+          )}
+
+          {/* State 3 — Result */}
+          {result && !isLoading && (
+            <div className="bg-white rounded-2xl shadow-2xl p-6">
+
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-xl text-gray-800">✨ AI Try-On Result</h3>
+                <span className="bg-green-100 text-green-600 text-sm font-semibold rounded-full px-3 py-1">
+                  98% Style Match
+                </span>
+              </div>
+
+              {/* Side-by-side images */}
+              <div className="flex gap-4">
+                <div className="w-1/2">
+                  <img
+                    src={previewUrl}
+                    alt="You"
+                    className="rounded-xl w-full object-cover h-64 shadow"
+                  />
+                  <p className="text-sm text-gray-500 text-center mt-1">You</p>
+                </div>
+                <div className="w-1/2">
+                  <img
+                    src={selectedOutfit?.image}
+                    alt={selectedOutfit?.name}
+                    className="rounded-xl w-full object-cover h-64 shadow"
+                  />
+                  <p className="text-sm text-gray-500 text-center mt-1 truncate">
+                    {selectedOutfit?.name}
+                  </p>
+                </div>
+              </div>
+
+              {/* Recommendations */}
+              <div className="mt-6">
+                <h4 className="font-semibold text-gray-700 mb-3">Style Recommendations</h4>
+                <div className="flex gap-3">
+                  {result.recommendations.map((rec, i) => (
+                    <div
+                      key={i}
+                      className="bg-pink-50 rounded-xl p-3 flex items-center gap-3 flex-1 min-w-0"
+                    >
+                      <img
+                        src={rec.image}
+                        alt={rec.item}
+                        className="w-12 h-12 rounded-lg object-cover shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-sm text-gray-800 truncate">{rec.item}</p>
+                        <p className="text-xs text-gray-400">{rec.type}</p>
+                      </div>
+                      <button className="text-pink-500 text-xs font-semibold ml-auto shrink-0 hover:text-pink-700 transition-colors duration-200">
+                        View
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+        </div>
       </div>
+
+      {/* ── Error Toast ───────────────────────────────────────────────────── */}
+      {generateError && (
+        <div className="fixed bottom-6 left-6 bg-red-500 text-white px-6 py-3 rounded-2xl shadow-xl z-50 max-w-sm">
+          {generateError}
+        </div>
+      )}
     </div>
   )
 }
